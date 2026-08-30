@@ -1,5 +1,6 @@
 package com.nexauren.nexaaudio
 
+import android.content.Intent
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
@@ -21,12 +22,10 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,33 +34,47 @@ import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     private var mediaPlayer: MediaPlayer? = null
+    private var selectedUri by mutableStateOf<Uri?>(null)
+    private var selectedName by mutableStateOf("No audio selected")
+    private var isPlaying by mutableStateOf(false)
+    private var durationMs by mutableIntStateOf(0)
+    private var positionMs by mutableIntStateOf(0)
 
     private val audioPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@registerForActivityResult
         try {
-            contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
         } catch (_: SecurityException) {
             // Some providers do not offer persistable permissions.
         }
+
         mediaPlayer?.release()
-        mediaPlayer = MediaPlayer().apply {
-            setDataSource(this@MainActivity, uri)
-            setOnPreparedListener { start() }
-            setOnCompletionListener { seekTo(0) }
-            prepareAsync()
-        }
         selectedUri = uri
         selectedName = queryDisplayName(uri) ?: "Selected audio"
         isPlaying = false
         durationMs = 0
         positionMs = 0
-    }
 
-    private var selectedUri by mutableStateOf<Uri?>(null)
-    private var selectedName by mutableStateOf("No audio selected")
-    private var isPlaying by mutableStateOf(false)
-    private var durationMs by mutableStateOf(0)
-    private var positionMs by mutableStateOf(0)
+        mediaPlayer = MediaPlayer().apply {
+            setDataSource(this@MainActivity, uri)
+            setOnPreparedListener { player ->
+                durationMs = player.duration
+                positionMs = 0
+                player.start()
+                isPlaying = true
+            }
+            setOnCompletionListener { player ->
+                player.seekTo(0)
+                positionMs = 0
+                isPlaying = false
+            }
+            setOnErrorListener { _, _, _ ->
+                isPlaying = false
+                true
+            }
+            prepareAsync()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,6 +99,11 @@ class MainActivity : ComponentActivity() {
                 onSeek = { value ->
                     mediaPlayer?.seekTo(value.toInt())
                     positionMs = value.toInt()
+                },
+                onTick = {
+                    mediaPlayer?.let { player ->
+                        if (player.isPlaying) positionMs = player.currentPosition
+                    }
                 }
             )
         }
@@ -116,12 +134,13 @@ private fun NexaAudioApp(
     durationMs: Int,
     onChoose: () -> Unit,
     onToggle: () -> Unit,
-    onSeek: (Float) -> Unit
+    onSeek: (Float) -> Unit,
+    onTick: () -> Unit
 ) {
     LaunchedEffect(isPlaying) {
         while (isPlaying) {
             delay(500)
-            // The activity owns the player state; recomposition is triggered by the UI actions.
+            onTick()
         }
     }
 
